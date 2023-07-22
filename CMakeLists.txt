@@ -39,5 +39,9 @@ string(
             8
             GIT_SHORT_SHA)
 
-# Adding the src:
+memsaab_setup_dependencies()
+
+# configure files based on CMake configuration options
+# add_subdirectory(configured_files)
+
 add_subdirectory(src)

@@ -8,7 +8,7 @@ ARG VARIANT
 # Install necessary packages available from standard repos
 RUN apt-get update -qq && export DEBIAN_FRONTEND=noninteractive && \
     apt-get install -y --no-install-recommends \
-        software-properties-common wget apt-utils file zip \
+        software-properties-common wget apt-utils file zip telnet \
         openssh-client gpg-agent socat rsync \
         make ninja-build git \
         python3 python3-pip
@@ -114,7 +114,7 @@ ENV CC=${CC:-"gcc"}
 ENV CXX=${CXX:-"g++"}
 
 # Include project
-#ADD . /workspaces/cpp_starter_project
-#WORKDIR /workspaces/cpp_starter_project
+ADD . /workspaces/memsaab
+WORKDIR /workspaces/memsaab
 
 CMD ["/bin/bash"]
