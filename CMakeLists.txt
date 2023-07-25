@@ -42,6 +42,6 @@ string(
 memsaab_setup_dependencies()
 
 # configure files based on CMake configuration options
-# add_subdirectory(configured_files)
+add_subdirectory(configured_files)
 
 add_subdirectory(src)
