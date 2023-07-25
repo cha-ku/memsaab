@@ -34,6 +34,7 @@ function(memsaab_setup_dependencies)
 
   if(NOT TARGET uvw::uvw)
     CPMAddPackage("gh:skypjack/uvw#v3.2.0_libuv_v1.46")
+    set(BUILD_UVW_LIBS ON CACHE BOOL "Prepare targets for static library rather than for a header-only library." FORCE)
   endif()
 
   if(NOT TARGET tools::tools)

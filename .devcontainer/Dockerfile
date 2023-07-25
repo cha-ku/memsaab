@@ -10,7 +10,7 @@ RUN apt-get update -qq && export DEBIAN_FRONTEND=noninteractive && \
     apt-get install -y --no-install-recommends \
         software-properties-common wget apt-utils file zip telnet \
         openssh-client gpg-agent socat rsync \
-        make ninja-build git \
+        make ninja-build git libuv1-dev\
         python3 python3-pip
 
 # Install conan
