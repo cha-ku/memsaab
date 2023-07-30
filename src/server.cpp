@@ -11,31 +11,42 @@ void server::start() noexcept
   loop->run();
 }
 
-cmd server::parse(std::string &cmd_str)
+std::variant<cmd, std::string> server::parse(std::string &cmd_str)
 {
   std::stringstream cmd_ss(cmd_str);
   const std::istream_iterator<std::string> beg(cmd_ss);
   const std::istream_iterator<std::string> end;
   std::vector<std::string> tokens(beg, end);
+
+  auto type = cmd_type::UNKNOWN;
+  if(tokens[0] == "set")
+  {
+    type = cmd_type::SET;
+  }
+  else if (tokens[0] == "get")
+  {
+    type = cmd_type::GET;
+  }
+  else {
+    return tokens[0];
+  }
+
   const auto max_tokens = 6;
   auto is_reply = reply::YES;
+
   if (std::size(tokens) == max_tokens && tokens.back() == "noreply")
   {
     is_reply = reply::NO;
   }
-  auto type = cmd_type::UNKNOWN;
-  if(tokens[0] == "set")
-  {
-     type = cmd_type::SET;
-  }
-  else if (tokens[0] == "get")
-  {
-     type = cmd_type::GET;
+
+  if(type == cmd_type::GET) {
+    return cmd(type, tokens[1], 0, 0, 0, is_reply);
   }
 
-  auto exp_time = std::stoi(tokens[2]);
-  auto bytes = static_cast<size_t>(std::stoi(tokens[3]));
-  return { type, tokens[1], exp_time, bytes, is_reply };
+  auto flags = static_cast<uint16_t>(std::stoi(tokens[2]));
+  auto exp_time = std::stoi(tokens[3]);
+  auto bytes = static_cast<unsigned int>(std::stoi(tokens[4]));
+  return cmd(type, tokens[1], flags, exp_time, bytes, is_reply);
 }
 void cmd::print(const cmd& subject) {
   std::string out;
@@ -59,6 +70,6 @@ void cmd::print(const cmd& subject) {
  else {
      out += "no";
  }
- fmt::print("cmd - {}", out);
+ fmt::print("cmd - {}\n", out);
 }
 }

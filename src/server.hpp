@@ -4,12 +4,18 @@
 
 #ifndef MEMSAAB_SERVER_HPP
 #define MEMSAAB_SERVER_HPP
-#include <uvw.hpp>
+#include <utility>
 #include <spdlog/spdlog.h>
 #include <memory>
 #include <vector>
 #include <unordered_map>
 #include <chrono>
+#include <uvw.hpp>
+
+using namespace std::chrono;
+typedef time_point<system_clock, seconds> MyTimePoint;
+
+
 constexpr int PORT = 69069;
 
 namespace memsaab {
@@ -17,29 +23,55 @@ namespace memsaab {
 enum class cmd_type {SET, GET, UNKNOWN};
 enum class reply {NO, YES};
 
-struct storage {
+//key, value, expiry_time
+struct key_exp_t
+{
+  std::string key;
+  int expiry_time{0};
+
+  key_exp_t& operator=(const key_exp_t& keyExp) = default;
+};
+
+//END if the key is not found, or VALUE <data block> <flags> <byte count> if the key is found.
+struct response_t {
+  std::string val;
+  std::string key;
+  std::string flags;
+  std::string byte_count;
+};
+
+
+struct storage_t {
   std::unordered_map<std::string, std::string> key_value;
   std::unordered_map<std::string, std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>> key_expiry;
-  storage()=default;
+  storage_t()=default;
 
-  void add(std::string& key, std::string& val, int expiry_time) {
-    key_value[key] = val;
+  void add(key_exp_t& key_exp, std::string& value) {
+    key_value[key_exp.key] = value;
     //https://stackoverflow.com/a/32811935/4063572
-    using namespace std::chrono;
-    typedef time_point<system_clock, seconds> MyTimePoint;
-    auto chrono_expiry_time = time_point_cast<MyTimePoint::duration>(system_clock::time_point(system_clock::now())) += seconds(expiry_time);
-    key_expiry[key] = chrono_expiry_time;
+    auto chrono_expiry_time = time_point_cast<MyTimePoint::duration>(system_clock::time_point(system_clock::now())) += seconds(key_exp.expiry_time);
+    key_expiry[key_exp.key] = chrono_expiry_time;
+  }
+
+  std::optional<std::string> get(std::string& key) {
+    if(key_value.find(key) != key_value.end()) {
+      return key_value[key];
+    }
+    return {};
   }
 };
 
 struct cmd {
-  cmd_type type {cmd_type::UNKNOWN};
+  cmd_type type;
   std::string key;
+  uint16_t flags;
   int expiry_time;
-  size_t byte_count;
-  reply need_reply {reply::YES};
+  unsigned int byte_count;
+  reply need_reply;
 
-  cmd(cmd_type& type_, std::string& key_, int expiry_time_, size_t& byte_count_, reply& need_reply_) : type(type_), key(std::move(key_)), expiry_time(expiry_time_), byte_count(byte_count_), need_reply(need_reply_) {}
+  cmd(cmd_type& type_, std::string& key_,
+    uint16_t flags_, int expiry_time_, unsigned int byte_count_, reply& need_reply_) : type(type_), key(std::move(key_)),
+                          flags(flags_), expiry_time(expiry_time_), byte_count(byte_count_), need_reply(need_reply_) {}
 
   static void print(const cmd& subject);
 };
@@ -51,7 +83,7 @@ class server {
   std::string host{"127.0.0.1"};
   std::vector<char> commands;
 
-  static cmd parse(std::string& cmd_str);
+  static std::variant<cmd, std::string> parse(std::string& cmd_str);
 
 public:
   explicit server(const server&)=delete;
@@ -66,27 +98,50 @@ public:
       const std::shared_ptr<uvw::tcp_handle> client = srv.parent().resource<uvw::tcp_handle>();
       spdlog::info("client created\n");
 
-      auto store = storage();
-      auto next_str_is_value = false;
-
-      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this, &next_str_is_value, &store]
-        (const uvw::data_event &dataEvent, uvw::tcp_handle &client) {
-        for(int i = 0; i < dataEvent.length; ++i) {
-          this->commands.emplace_back(dataEvent.data[i]);
-        }
-        std::string str(this->commands.begin(), this->commands.end());
-        auto parsed_cmd = parse(str);
-        if (parsed_cmd.type == cmd_type::SET) {
-          cmd::print(parsed_cmd);
-          next_str_is_value = true;
-          this->commands.clear();
-        }
-        //fmt::print("Command Received: {}", str);
-        if (next_str_is_value) {
-          store.add(parsed_cmd.key, str, parsed_cmd.expiry_time);
-          std::array<char, 6>stored{'S','T','O','R','E','D'};
-          client.write(stored.data(), std::size(stored));
-        }
+      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this]
+        (const uvw::data_event &dataEvent, uvw::tcp_handle& client) mutable {
+          auto store = storage_t();
+          std::string_view last_str;
+          key_exp_t storage_val;
+          std::array<char, 8>stored{'S','T','O','R','E','D', '\r', '\n'};
+          std::array<char, 5>not_found{'E', 'N','D', '\r', '\n'};
+          //printf("data event received %s\n", dataEvent.data.get());
+          const auto de_len = dataEvent.length;
+          if (de_len > 2 && dataEvent.data[de_len-1] == '\n' && dataEvent.data[de_len-2] == '\r') {
+            for(int i = 0; i < dataEvent.length; ++i) {
+              this->commands.emplace_back(dataEvent.data[i]);
+            }
+            std::string str(this->commands.begin(), this->commands.end());
+            if (str == last_str) {
+              return;
+            }
+            else {
+              last_str = str;
+            }
+            auto parsed_cmd_variant = parse(str);
+            if (std::holds_alternative<cmd>(parsed_cmd_variant)) {
+              auto parsed_cmd = std::get<cmd>(parsed_cmd_variant);
+              cmd::print(parsed_cmd);
+              //handle set, get and other commands
+              if (parsed_cmd.type == cmd_type::SET) {
+                storage_val = key_exp_t(parsed_cmd.key, parsed_cmd.expiry_time);
+              }
+              else if (parsed_cmd.type == cmd_type::GET) {
+                auto anOptional = store.get(parsed_cmd.key);
+                if(anOptional.has_value()) {
+                  client.write(anOptional.value().data(), anOptional.value().size());
+                }
+                else {
+                  client.write(not_found.data(), std::size(not_found));
+                }
+              }
+            }
+            else {
+              store.add(storage_val, std::get<std::string>(parsed_cmd_variant));
+              client.write(stored.data(), std::size(stored));
+            }
+            this->commands.clear();
+          }
       });
       client->on<uvw::end_event>([](const uvw::end_event &, uvw::tcp_handle &client) {
         spdlog::info("Client end event\n");
