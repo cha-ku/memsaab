@@ -4,6 +4,7 @@
 
 #ifndef MEMSAAB_SERVER_HPP
 #define MEMSAAB_SERVER_HPP
+#include <memory>
 #include <utility>
 #include <spdlog/spdlog.h>
 #include <memory>
@@ -28,8 +29,6 @@ struct key_exp_t
 {
   std::string key;
   int expiry_time{0};
-
-  key_exp_t& operator=(const key_exp_t& keyExp) = default;
 };
 
 //END if the key is not found, or VALUE <data block> <flags> <byte count> if the key is found.
@@ -76,12 +75,19 @@ struct cmd {
   static void print(const cmd& subject);
 };
 
+struct resource_handle_t {
+  std::string_view last_str;
+  key_exp_t storage_val;
+  storage_t store;
+};
+
 class server {
   int port{ PORT };
   std::shared_ptr<uvw::tcp_handle> tcp;
   std::shared_ptr<uvw::loop> loop;
   std::string host{"127.0.0.1"};
   std::vector<char> commands;
+  std::unordered_map<std::shared_ptr<uvw::tcp_handle>, resource_handle_t> resourceMap;
 
   static std::variant<cmd, std::string> parse(std::string& cmd_str);
 
@@ -97,14 +103,16 @@ public:
       spdlog::info("tcp listen event\n");
       const std::shared_ptr<uvw::tcp_handle> client = srv.parent().resource<uvw::tcp_handle>();
       spdlog::info("client created\n");
+      resourceMap[client] = resource_handle_t();
 
-      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this]
-        (const uvw::data_event &dataEvent, uvw::tcp_handle& client) mutable {
-          auto store = storage_t();
-          std::string_view last_str;
-          key_exp_t storage_val;
-          std::array<char, 8>stored{'S','T','O','R','E','D', '\r', '\n'};
-          std::array<char, 5>not_found{'E', 'N','D', '\r', '\n'};
+      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this, &client]
+        (const uvw::data_event &dataEvent, uvw::tcp_handle& clientHandle) mutable {
+          auto& resourceHandle =  this->resourceMap[client];
+
+          spdlog::info("last_str: {}", resourceHandle.last_str);
+
+          std::array<char, 8> stored{'S','T','O','R','E','D', '\r', '\n'};
+          std::array<char, 5> not_found{'E', 'N','D', '\r', '\n'};
           //printf("data event received %s\n", dataEvent.data.get());
           const auto de_len = dataEvent.length;
           if (de_len > 2 && dataEvent.data[de_len-1] == '\n' && dataEvent.data[de_len-2] == '\r') {
@@ -112,11 +120,11 @@ public:
               this->commands.emplace_back(dataEvent.data[i]);
             }
             std::string str(this->commands.begin(), this->commands.end());
-            if (str == last_str) {
+            if (str == (resourceHandle.last_str)) {
               return;
             }
             else {
-              last_str = str;
+              resourceHandle.last_str = str;
             }
             auto parsed_cmd_variant = parse(str);
             if (std::holds_alternative<cmd>(parsed_cmd_variant)) {
@@ -124,21 +132,24 @@ public:
               cmd::print(parsed_cmd);
               //handle set, get and other commands
               if (parsed_cmd.type == cmd_type::SET) {
-                storage_val = key_exp_t(parsed_cmd.key, parsed_cmd.expiry_time);
+                resourceHandle.storage_val = key_exp_t();
+                //client_resource->storage_val = key_exp_t(parsed_cmd.key, parsed_cmd.expiry_time);
+                resourceHandle.storage_val.key = parsed_cmd.key;
+                resourceHandle.storage_val.expiry_time = parsed_cmd.expiry_time;
               }
               else if (parsed_cmd.type == cmd_type::GET) {
-                auto anOptional = store.get(parsed_cmd.key);
+                auto anOptional = resourceHandle.store.get(parsed_cmd.key);
                 if(anOptional.has_value()) {
-                  client.write(anOptional.value().data(), anOptional.value().size());
+                  clientHandle.write(anOptional.value().data(), anOptional.value().size());
                 }
                 else {
-                  client.write(not_found.data(), std::size(not_found));
+                  clientHandle.write(not_found.data(), std::size(not_found));
                 }
               }
             }
             else {
-              store.add(storage_val, std::get<std::string>(parsed_cmd_variant));
-              client.write(stored.data(), std::size(stored));
+              resourceHandle.store.add(resourceHandle.storage_val, std::get<std::string>(parsed_cmd_variant));
+              clientHandle.write(stored.data(), std::size(stored));
             }
             this->commands.clear();
           }

@@ -50,7 +50,7 @@ std::variant<cmd, std::string> server::parse(std::string &cmd_str)
 }
 void cmd::print(const cmd& subject) {
   std::string out;
-  out += " type:";
+  out += "type:";
  if(subject.type == cmd_type::SET) {
      out += "set";
  }
@@ -61,6 +61,7 @@ void cmd::print(const cmd& subject) {
      out += "unknown";
  }
  out += " key:" + subject.key;
+ out += " flags:" + std::to_string(subject.flags);
  out += " expiry_time:" + std::to_string(subject.expiry_time);
  out += " bytes:" + std::to_string(subject.byte_count);
  out += " reply:";
