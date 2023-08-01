@@ -87,6 +87,7 @@ class server {
   std::shared_ptr<uvw::loop> loop;
   std::string host{"127.0.0.1"};
   std::vector<char> commands;
+  uint16_t id{0};
   std::unordered_map<std::shared_ptr<uvw::tcp_handle>, resource_handle_t> resourceMap;
 
   static std::variant<cmd, std::string> parse(std::string& cmd_str);
@@ -102,14 +103,15 @@ public:
     tcp->on<uvw::listen_event>([this](const uvw::listen_event &, uvw::tcp_handle &srv) {
       spdlog::info("tcp listen event\n");
       const std::shared_ptr<uvw::tcp_handle> client = srv.parent().resource<uvw::tcp_handle>();
-      spdlog::info("client created\n");
+      spdlog::info("client created, id {}\n", fmt::ptr(client));
+
       resourceMap[client] = resource_handle_t();
 
-      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this, &client]
+      client->on<uvw::data_event>([ptr = srv.shared_from_this(), this]
         (const uvw::data_event &dataEvent, uvw::tcp_handle& clientHandle) mutable {
-          auto& resourceHandle =  this->resourceMap[client];
-
-          spdlog::info("last_str: {}", resourceHandle.last_str);
+          auto clientPtr = clientHandle.shared_from_this();
+            spdlog::info("client {} data event\n", fmt::ptr(clientPtr));
+          auto& resourceHandle = resourceMap[clientPtr] ;
 
           std::array<char, 8> stored{'S','T','O','R','E','D', '\r', '\n'};
           std::array<char, 5> not_found{'E', 'N','D', '\r', '\n'};
