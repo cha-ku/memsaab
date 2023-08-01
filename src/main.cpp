@@ -11,7 +11,7 @@ int main(int argc, char **argv)
     int port_number{ 11211 };
     app.add_option("-p,--port", port_number, "Set port number");
     CLI11_PARSE(app, argc, argv);
-    memsaab::server srv(port_number);
+    memsaab::Server srv(port_number);
     srv.start();
   } catch (const std::exception &e) {
     spdlog::error("Unhandled exception in main: {}", e.what());
