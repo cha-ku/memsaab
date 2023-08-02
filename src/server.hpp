@@ -120,7 +120,7 @@ public:
           std::array<char, 5> notFound{'E', 'N','D', '\r', '\n'};
           //printf("data event received %s\n", dataEvent.data.get());
           const auto deLen = dataEvent.length;
-          if (deLen > 2 && dataEvent.data[deLen -1] == '\n' && dataEvent.data[deLen -2] == '\r') {
+          if (deLen > 2 && dataEvent.data[deLen-1] == '\n' && dataEvent.data[deLen-2] == '\r') {
             for(int i = 0; i < dataEvent.length; ++i) {
               this->commands.emplace_back(dataEvent.data[i]);
             }
