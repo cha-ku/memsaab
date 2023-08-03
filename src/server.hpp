@@ -11,11 +11,8 @@
 #include <vector>
 #include <unordered_map>
 #include <chrono>
+#include <fmt/chrono.h>
 #include <uvw.hpp>
-
-using namespace std::chrono;
-typedef time_point<system_clock, seconds> MyTimePoint;
-
 
 constexpr int PORT = 69069;
 
@@ -23,6 +20,7 @@ namespace memsaab {
 
 enum class CmdType {SET, GET, UNKNOWN};
 enum class Reply {NO, YES};
+enum class Expiry {ALWAYS, NEVER};
 
 //key, value, expiry_time
 struct KeyAttributes
@@ -30,7 +28,7 @@ struct KeyAttributes
   std::string key;
   int expiry_time{0};
   uint16_t flags{0};
-  size_t byte_count;
+  size_t byte_count{0};
 };
 
 //END if the key is not found, or VALUE <data block> <flags> <byte count> if the key is found.
@@ -43,20 +41,58 @@ struct Response
 struct Storage
 {
   std::unordered_map<std::string, std::string> key_value;
-  std::unordered_map<std::string, std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>> key_expiry;
+  using ExpiryTimePoint = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>;
+  using ExpiryVariant = std::variant<Expiry, ExpiryTimePoint>;
+  std::unordered_map<std::string, ExpiryVariant> key_expiry;
   Storage()=default;
+
+  void remove(std::string& key) {
+    key_value.erase(key);
+    key_expiry.erase(key);
+  }
 
   void add(KeyAttributes& key_exp, const Response& response) {
     auto to_add = response.val.substr(0, key_exp.byte_count);
     spdlog::info("Saving {} : {}\n", key_exp.key, to_add);
     key_value[key_exp.key] = to_add;
     //https://stackoverflow.com/a/32811935/4063572
-    auto chrono_expiry_time = time_point_cast<MyTimePoint::duration>(system_clock::time_point(system_clock::now())) += seconds(key_exp.expiry_time);
-    key_expiry[key_exp.key] = chrono_expiry_time;
+    ExpiryVariant expValue;
+    if (key_exp.expiry_time < 0) {
+      expValue = Expiry::ALWAYS;
+    }
+    else if (key_exp.expiry_time == 0) {
+      expValue = Expiry::NEVER;
+    }
+    else {
+      using namespace std::chrono;
+      auto expiryTime = time_point_cast<ExpiryTimePoint::duration>(system_clock::time_point(system_clock::now())) + seconds(key_exp.expiry_time);
+      spdlog::info("Expiry time set to {:%Y-%m-%d %H:%M:%S}\n", expiryTime);
+      expValue = expiryTime;
+    }
+    key_expiry[key_exp.key] = expValue;
   }
 
   std::optional<Response> get(std::string& key) {
     if(key_value.find(key) != key_value.end()) {
+      if(std::holds_alternative<ExpiryTimePoint>(key_expiry[key])) {
+        auto now = std::chrono::system_clock::now();
+        auto expires = std::get<ExpiryTimePoint>(key_expiry[key]);
+        if (now > expires)
+        {
+          spdlog::info("Item expired on {:%Y-%m-%d %H:%M:%S}, current time: {:%Y-%m-%d %H:%M:%S}\n", expires, now);
+          remove(key);
+          return {};
+        }
+      }
+      else
+      {
+        auto specialExpiry = std::get<Expiry>(key_expiry[key]);
+        if (specialExpiry == Expiry::ALWAYS)
+        {
+          remove(key);
+          return {};
+        }
+      }
       return Response(key_value[key]);
     }
     return {};
@@ -117,7 +153,7 @@ public:
           auto& resourceHandle = resourceMap[clientPtr] ;
 
           std::array<char, 8> stored{'S','T','O','R','E','D', '\r', '\n'};
-          std::array<char, 5> notFound{'E', 'N','D', '\r', '\n'};
+          std::array<char, 5> end{'E', 'N','D', '\r', '\n'};
           //printf("data event received %s\n", dataEvent.data.get());
           const auto deLen = dataEvent.length;
           if (deLen > 2 && dataEvent.data[deLen-1] == '\n' && dataEvent.data[deLen-2] == '\r') {
@@ -137,7 +173,6 @@ public:
               Cmd::print(parsedCmd);
               //handle set, get and other commands
               if (parsedCmd.type == CmdType::SET) {
-                //resourceHandle.storage_val = KeyAttributes();
                 resourceHandle.storage_val = parsedCmd.keyAttrs;
               }
               else if (parsedCmd.type == CmdType::GET) {
@@ -148,9 +183,10 @@ public:
                   responseStr += response.val + " " + std::to_string(resourceHandle.storage_val.flags) + " " +
                                  std::to_string(resourceHandle.storage_val.byte_count) + "\r\n";
                   clientHandle.write(responseStr.data(), std::size(responseStr));
+                  clientHandle.write(end.data(), std::size(end));
                 }
                 else {
-                  clientHandle.write(notFound.data(), std::size(notFound));
+                  clientHandle.write(end.data(), std::size(end));
                 }
               }
             }
