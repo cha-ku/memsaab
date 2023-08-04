@@ -27,6 +27,22 @@ std::variant<Cmd, std::string> Server::parse(std::string &cmd_str)
   {
     type = CmdType::GET;
   }
+  else if (tokens[0] == "add")
+  {
+    type = CmdType::ADD;
+  }
+  else if (tokens[0] == "replace")
+  {
+    type = CmdType::REPLACE;
+  }
+  else if (tokens[0] == "append")
+  {
+    type = CmdType::APPEND;
+  }
+  else if (tokens[0] == "prepend")
+  {
+    type = CmdType::PREPEND;
+  }
   else {
     return tokens[0];
   }
@@ -39,8 +55,14 @@ std::variant<Cmd, std::string> Server::parse(std::string &cmd_str)
     is_reply = Reply::NO;
   }
 
-  if(type == CmdType::GET) {
+  if(type == CmdType::GET)
+  {
     return Cmd(type, tokens[1], 0, 0, 0, is_reply);
+  }
+
+  if(type == CmdType::APPEND)
+  {
+    return Cmd(type, tokens[1], 0, 0, std::size(tokens[1]), is_reply);
   }
 
   auto flags = static_cast<uint16_t>(std::stoi(tokens[2]));
@@ -48,29 +70,54 @@ std::variant<Cmd, std::string> Server::parse(std::string &cmd_str)
   auto bytes = static_cast<unsigned int>(std::stoi(tokens[4]));
   return Cmd(type, tokens[1], flags, exp_time, bytes, is_reply);
 }
-void Cmd::print(const Cmd & subject) {
+
+
+void Cmd::print(const Cmd & subject)
+{
   std::string out;
   out += "type:";
- if(subject.type == CmdType::SET) {
-     out += "set";
- }
- else if (subject.type == CmdType::GET) {
-     out += "get";
- }
- else {
-     out += "unknown";
- }
- out += " key:" + subject.keyAttrs.key;
- out += " flags:" + std::to_string(subject.keyAttrs.flags);
- out += " expiry_time:" + std::to_string(subject.keyAttrs.expiry_time);
- out += " bytes:" + std::to_string(subject.keyAttrs.byte_count);
- out += " Reply:";
- if (subject.need_reply == Reply::YES) {
-     out += "yes";
- }
- else {
-     out += "no";
- }
- fmt::print("cmd - {}\n", out);
+
+  if (subject.type == CmdType::SET)
+  {
+    out += "set";
+  }
+  else if (subject.type == CmdType::GET)
+  {
+    out += "get";
+  }
+  else if (subject.type == CmdType::ADD)
+  {
+    out += "add";
+  }
+  else if (subject.type == CmdType::REPLACE)
+  {
+    out += "replace";
+  }
+  else if (subject.type == CmdType::APPEND)
+  {
+    out += "append";
+  }
+  else if (subject.type == CmdType::PREPEND)
+  {
+    out += "prepend";
+  }
+  else
+  {
+    out += "unknown";
+  }
+  out += " key:" + subject.keyAttrs.key;
+  out += " flags:" + std::to_string(subject.keyAttrs.flags);
+  out += " expiry_time:" + std::to_string(subject.keyAttrs.expiry_time);
+  out += " bytes:" + std::to_string(subject.keyAttrs.byte_count);
+  out += " Reply:";
+  if (subject.need_reply == Reply::YES)
+  {
+    out += "yes";
+  }
+  else
+  {
+    out += "no";
+  }
+  fmt::print("cmd - {}\n", out);
 }
 }

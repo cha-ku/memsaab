@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 #include <spdlog/spdlog.h>
-#include <memory>
 #include <vector>
 #include <unordered_map>
 #include <chrono>
@@ -18,7 +17,7 @@ constexpr int PORT = 69069;
 
 namespace memsaab {
 
-enum class CmdType {SET, GET, UNKNOWN};
+enum class CmdType {SET, GET, ADD, REPLACE, APPEND, PREPEND, UNKNOWN};
 enum class Reply {NO, YES};
 enum class Expiry {ALWAYS, NEVER};
 
@@ -46,24 +45,29 @@ struct Storage
   std::unordered_map<std::string, ExpiryVariant> key_expiry;
   Storage()=default;
 
-  void remove(std::string& key) {
+  void remove(std::string& key)
+  {
     key_value.erase(key);
     key_expiry.erase(key);
   }
 
-  void add(KeyAttributes& key_exp, const Response& response) {
+  void set(KeyAttributes& key_exp, const Response& response)
+  {
     auto to_add = response.val.substr(0, key_exp.byte_count);
     spdlog::info("Saving {} : {}\n", key_exp.key, to_add);
     key_value[key_exp.key] = to_add;
     //https://stackoverflow.com/a/32811935/4063572
     ExpiryVariant expValue;
-    if (key_exp.expiry_time < 0) {
+    if (key_exp.expiry_time < 0)
+    {
       expValue = Expiry::ALWAYS;
     }
-    else if (key_exp.expiry_time == 0) {
+    else if (key_exp.expiry_time == 0)
+    {
       expValue = Expiry::NEVER;
     }
-    else {
+    else
+    {
       using namespace std::chrono;
       auto expiryTime = time_point_cast<ExpiryTimePoint::duration>(system_clock::time_point(system_clock::now())) + seconds(key_exp.expiry_time);
       spdlog::info("Expiry time set to {:%Y-%m-%d %H:%M:%S}\n", expiryTime);
@@ -72,9 +76,12 @@ struct Storage
     key_expiry[key_exp.key] = expValue;
   }
 
-  std::optional<Response> get(std::string& key) {
-    if(key_value.find(key) != key_value.end()) {
-      if(std::holds_alternative<ExpiryTimePoint>(key_expiry[key])) {
+  std::optional<Response> get(std::string& key)
+  {
+    if(key_value.find(key) != key_value.end())
+    {
+      if(std::holds_alternative<ExpiryTimePoint>(key_expiry[key]))
+      {
         auto now = std::chrono::system_clock::now();
         auto expires = std::get<ExpiryTimePoint>(key_expiry[key]);
         if (now > expires)
@@ -136,10 +143,11 @@ public:
   explicit Server(Server &&)=delete;
   Server & operator= (const Server &) = delete;
   Server & operator= (const Server &&) = delete;
-  explicit Server(int port_number_) : port(port_number_), loop(uvw::loop::get_default()) {
+  explicit Server(int port_number_) : port(port_number_), loop(uvw::loop::get_default())
+  {
     tcp = loop->resource<uvw::tcp_handle>();
     tcp->on<uvw::error_event>([](const uvw::error_event &err, uvw::tcp_handle &) {spdlog::error("Connection received error event {}", err.what());});
-    tcp->on<uvw::listen_event>([this](const uvw::listen_event &, uvw::tcp_handle &srv) {
+    tcp->on<uvw::listen_event>([this](const uvw::listen_event &, uvw::tcp_handle &srv){
       spdlog::info("tcp listen event\n");
       const std::shared_ptr<uvw::tcp_handle> client = srv.parent().resource<uvw::tcp_handle>();
       spdlog::info("client created, id {}\n", fmt::ptr(client));
@@ -153,45 +161,76 @@ public:
           auto& resourceHandle = resourceMap[clientPtr] ;
 
           std::array<char, 8> stored{'S','T','O','R','E','D', '\r', '\n'};
+          std::array<char, 12> notStored{'N', 'O', 'T', '_', 'S','T','O','R','E','D', '\r', '\n'};
           std::array<char, 5> end{'E', 'N','D', '\r', '\n'};
           //printf("data event received %s\n", dataEvent.data.get());
           const auto deLen = dataEvent.length;
-          if (deLen > 2 && dataEvent.data[deLen-1] == '\n' && dataEvent.data[deLen-2] == '\r') {
-            for(int i = 0; i < dataEvent.length; ++i) {
+          if (deLen > 2 && dataEvent.data[deLen-1] == '\n' && dataEvent.data[deLen-2] == '\r')
+          {
+            for(int i = 0; i < dataEvent.length; ++i)
+            {
               this->commands.emplace_back(dataEvent.data[i]);
             }
             std::string str(this->commands.begin(), this->commands.end());
-            if (str == (resourceHandle.last_str)) {
+            if (str == (resourceHandle.last_str))
+            {
               return;
             }
             else {
               resourceHandle.last_str = str;
             }
             auto parsedCmdVariant = parse(str);
-            if (std::holds_alternative<Cmd>(parsedCmdVariant)) {
+            if (std::holds_alternative<Cmd>(parsedCmdVariant))
+            {
               auto parsedCmd = std::get<Cmd>(parsedCmdVariant);
               Cmd::print(parsedCmd);
               //handle set, get and other commands
-              if (parsedCmd.type == CmdType::SET) {
+              if (parsedCmd.type == CmdType::SET)
+              {
                 resourceHandle.storage_val = parsedCmd.keyAttrs;
               }
-              else if (parsedCmd.type == CmdType::GET) {
+              else if (parsedCmd.type == CmdType::ADD)
+              {
+                if (resourceHandle.store.key_value.find(parsedCmd.keyAttrs.key) == resourceHandle.store.key_value.end())
+                {
+                  resourceHandle.storage_val = parsedCmd.keyAttrs;
+                }
+                else
+                {
+                  clientHandle.write(notStored.data(), std::size(notStored));
+                }
+              }
+              else if (parsedCmd.type == CmdType::REPLACE)
+              {
+                if(resourceHandle.store.key_value.find(parsedCmd.keyAttrs.key) != resourceHandle.store.key_value.end())
+                {
+                  resourceHandle.storage_val = parsedCmd.keyAttrs;
+                }
+                else
+                {
+                  clientHandle.write(notStored.data(), std::size(notStored));
+                }
+              }
+              else if (parsedCmd.type == CmdType::GET)
+              {
                 auto anOptional = resourceHandle.store.get(parsedCmd.keyAttrs.key);
-                if(anOptional.has_value()) {
+                if(anOptional.has_value())
+                {
                   auto& response = anOptional.value();
                   std::string responseStr = "VALUE ";
                   responseStr += response.val + " " + std::to_string(resourceHandle.storage_val.flags) + " " +
-                                 std::to_string(resourceHandle.storage_val.byte_count) + "\r\n";
+                                 std::to_string(std::size(response.val)) + "\r\n";
                   clientHandle.write(responseStr.data(), std::size(responseStr));
                   clientHandle.write(end.data(), std::size(end));
                 }
-                else {
+                else
+                {
                   clientHandle.write(end.data(), std::size(end));
                 }
               }
             }
             else {
-              resourceHandle.store.add(resourceHandle.storage_val, Response(std::get<std::string>(parsedCmdVariant)));
+              resourceHandle.store.set(resourceHandle.storage_val, Response(std::get<std::string>(parsedCmdVariant)));
               clientHandle.write(stored.data(), std::size(stored));
             }
             this->commands.clear();
@@ -212,7 +251,8 @@ public:
     tcp->bind(host, port);
     tcp->listen();
   }
-  ~Server() {
+  ~Server()
+  {
     spdlog::info("Closing connection on {}:{}", host, port);
     tcp->close();
     loop->close();
