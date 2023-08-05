@@ -36,6 +36,7 @@ struct Response
   std::string val;
 };
 
+enum class Result {STORED, NOT_STORED, UNKNOWN};
 
 struct Storage
 {
@@ -51,11 +52,60 @@ struct Storage
     key_expiry.erase(key);
   }
 
-  void set(KeyAttributes& key_exp, const Response& response)
+  Result set(KeyAttributes& key_exp, const Response& response, const CmdType prevCommand)
   {
     auto to_add = response.val.substr(0, key_exp.byte_count);
+    if(prevCommand == CmdType::APPEND)
+    {
+      if (key_value.find(key_exp.key) == key_value.end())
+      {
+        return Result::NOT_STORED;
+      }
+      else
+      {
+        key_value[key_exp.key] = key_value[key_exp.key] + to_add;
+        return Result::STORED;
+      }
+    }
+    if(prevCommand == CmdType::PREPEND)
+    {
+      if (key_value.find(key_exp.key) == key_value.end())
+      {
+        return Result::NOT_STORED;
+      }
+      else
+      {
+        key_value[key_exp.key] = to_add + key_value[key_exp.key];
+        return Result::STORED;
+      }
+    }
+    if(prevCommand == CmdType::ADD)
+    {
+      if (key_value.find(key_exp.key) != key_value.end())
+      {
+        return Result::NOT_STORED;
+      }
+      else
+      {
+        key_value[key_exp.key] = to_add;
+      }
+    }
+    if(prevCommand == CmdType::REPLACE)
+    {
+      if (key_value.find(key_exp.key) == key_value.end())
+      {
+        return Result::NOT_STORED;
+      }
+      else
+      {
+        key_value[key_exp.key] = to_add;
+      }
+    }
+    if(prevCommand == CmdType::SET)
+    {
+      key_value[key_exp.key] = to_add;
+    }
     spdlog::info("Saving {} : {}\n", key_exp.key, to_add);
-    key_value[key_exp.key] = to_add;
     //https://stackoverflow.com/a/32811935/4063572
     ExpiryVariant expValue;
     if (key_exp.expiry_time < 0)
@@ -74,6 +124,7 @@ struct Storage
       expValue = expiryTime;
     }
     key_expiry[key_exp.key] = expValue;
+    return Result::STORED;
   }
 
   std::optional<Response> get(std::string& key)
@@ -121,6 +172,7 @@ struct Cmd
 
 struct ResourceHandle
 {
+  CmdType prevCommand{CmdType::UNKNOWN};
   std::string_view last_str;
   KeyAttributes storage_val;
   Storage store;
@@ -185,31 +237,10 @@ public:
               auto parsedCmd = std::get<Cmd>(parsedCmdVariant);
               Cmd::print(parsedCmd);
               //handle set, get and other commands
-              if (parsedCmd.type == CmdType::SET)
+              if (parsedCmd.type == CmdType::SET || parsedCmd.type == CmdType::ADD || parsedCmd.type == CmdType::REPLACE || parsedCmd.type == CmdType::APPEND || parsedCmd.type == CmdType::PREPEND )
               {
                 resourceHandle.storage_val = parsedCmd.keyAttrs;
-              }
-              else if (parsedCmd.type == CmdType::ADD)
-              {
-                if (resourceHandle.store.key_value.find(parsedCmd.keyAttrs.key) == resourceHandle.store.key_value.end())
-                {
-                  resourceHandle.storage_val = parsedCmd.keyAttrs;
-                }
-                else
-                {
-                  clientHandle.write(notStored.data(), std::size(notStored));
-                }
-              }
-              else if (parsedCmd.type == CmdType::REPLACE)
-              {
-                if(resourceHandle.store.key_value.find(parsedCmd.keyAttrs.key) != resourceHandle.store.key_value.end())
-                {
-                  resourceHandle.storage_val = parsedCmd.keyAttrs;
-                }
-                else
-                {
-                  clientHandle.write(notStored.data(), std::size(notStored));
-                }
+                resourceHandle.prevCommand = parsedCmd.type;
               }
               else if (parsedCmd.type == CmdType::GET)
               {
@@ -218,8 +249,8 @@ public:
                 {
                   auto& response = anOptional.value();
                   std::string responseStr = "VALUE ";
-                  responseStr += response.val + " " + std::to_string(resourceHandle.storage_val.flags) + " " +
-                                 std::to_string(std::size(response.val)) + "\r\n";
+                  responseStr += parsedCmd.keyAttrs.key + " " + std::to_string(resourceHandle.storage_val.flags) + " " +
+                                 std::to_string(std::size(response.val)) + "\r\n" + response.val + "\r\n";
                   clientHandle.write(responseStr.data(), std::size(responseStr));
                   clientHandle.write(end.data(), std::size(end));
                 }
@@ -230,8 +261,13 @@ public:
               }
             }
             else {
-              resourceHandle.store.set(resourceHandle.storage_val, Response(std::get<std::string>(parsedCmdVariant)));
-              clientHandle.write(stored.data(), std::size(stored));
+              auto result = resourceHandle.store.set(resourceHandle.storage_val, Response(std::get<std::string>(parsedCmdVariant)), resourceHandle.prevCommand);
+              switch(result)
+              {
+              case Result::STORED: clientHandle.write(stored.data(), std::size(stored)); break;
+              case Result::NOT_STORED: clientHandle.write(notStored.data(), std::size(notStored)); break;
+              default: break;
+              }
             }
             this->commands.clear();
           }
