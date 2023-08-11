@@ -25,8 +25,8 @@ enum class Expiry {ALWAYS, NEVER};
 struct KeyAttributes
 {
   std::string key;
-  int expiry_time{0};
   uint16_t flags{0};
+  int expiry_time{0};
   size_t byte_count{0};
 };
 
@@ -176,6 +176,7 @@ struct ResourceHandle
   std::string_view last_str;
   KeyAttributes storage_val;
   Storage store;
+  Reply needReply;
 };
 
 class Server
@@ -224,13 +225,8 @@ public:
               this->commands.emplace_back(dataEvent.data[i]);
             }
             std::string str(this->commands.begin(), this->commands.end());
-            if (str == (resourceHandle.last_str))
-            {
-              return;
-            }
-            else {
-              resourceHandle.last_str = str;
-            }
+            if (str == (resourceHandle.last_str)) { return;}
+            else { resourceHandle.last_str = str;}
             auto parsedCmdVariant = parse(str);
             if (std::holds_alternative<Cmd>(parsedCmdVariant))
             {
@@ -241,6 +237,7 @@ public:
               {
                 resourceHandle.storage_val = parsedCmd.keyAttrs;
                 resourceHandle.prevCommand = parsedCmd.type;
+                resourceHandle.needReply = parsedCmd.need_reply;
               }
               else if (parsedCmd.type == CmdType::GET)
               {
@@ -260,13 +257,16 @@ public:
                 }
               }
             }
-            else {
+            else
+            {
               auto result = resourceHandle.store.set(resourceHandle.storage_val, Response(std::get<std::string>(parsedCmdVariant)), resourceHandle.prevCommand);
-              switch(result)
-              {
-              case Result::STORED: clientHandle.write(stored.data(), std::size(stored)); break;
-              case Result::NOT_STORED: clientHandle.write(notStored.data(), std::size(notStored)); break;
-              default: break;
+              if (resourceHandle.needReply == Reply::YES) {
+                switch(result)
+                {
+                case Result::STORED: clientHandle.write(stored.data(), std::size(stored)); break;
+                case Result::NOT_STORED: clientHandle.write(notStored.data(), std::size(notStored)); break;
+                default: break;
+                }
               }
             }
             this->commands.clear();
